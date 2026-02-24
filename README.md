@@ -114,99 +114,112 @@ grep -o 'fuse-ld=[a-z]*' build/build.ninja | sort | uniq -c
 
 ---
 
-## Experimental: lld Linker
+## Building with lld linker
 
-The project includes a `USE_LLD` CMake option for experimenting with LLVM's
-`ld.lld` linker while retaining the GCC compiler from the Zephyr SDK.
+The project supports building with LLVM's `ld.lld` linker while retaining
+the GCC compiler from the Zephyr SDK.  This required solving three
+incompatibilities between Zephyr's lld module (designed for clang) and GCC.
 
-### How it works
+### Prerequisites for lld
+
+- **lld >= 14.0** installed on the system (`apt install lld` or
+  `brew install llvm`)
+- One-time setup to patch the Zephyr tree and SDK (see below)
+
+### Setup
+
+Run the provided setup script to apply the required patches:
+
+```bash
+export ZEPHYR_BASE=~/zephyrproject/zephyr   # adjust if needed
+./scripts/setup_lld.sh
+```
+
+The script applies three non-destructive, reversible patches:
+
+1. **`cmake/linker/lld/gcc/linker_flags.cmake`** (new file in Zephyr tree) —
+   bridges the lld linker module with GCC-specific flags (`-specs=`,
+   `-gdwarf-4`).  Mirrors `ld/gcc/linker_flags.cmake` for the lld case.
+
+2. **`cmake/linker/lld/linker_libraries.cmake`** (patched in Zephyr tree) —
+   sets the runtime library to `-lgcc` when the compiler is GCC (the
+   original sets it to `""` for clang/compiler-rt).
+
+3. **`ld.lld` symlink** in the SDK's `arm-zephyr-eabi/arm-zephyr-eabi/bin/`
+   — GCC's `collect2` must find `ld.lld` in its toolchain search path.
+
+### Building with lld
 
 ```bash
 west build -p always -b bbc_microbit_v2 -d build_lld . -- -DUSE_LLD=ON
 ```
 
-When `USE_LLD=ON`, the `CMakeLists.txt`:
+When `USE_LLD=ON`, the build activates a custom toolchain variant
+(`zephyr_lld`) that wraps the standard Zephyr SDK and overrides `LINKER`
+from `ld` to `lld`.  This causes Zephyr's `cmake/linker/lld/` module to be
+used, which:
 
-1. **Patches the `sort_alignment` linker property** — removes
-   `--sort-common=descending` (a GNU ld extension unsupported by lld) while
-   keeping `--sort-section=alignment` (supported by both).
-2. **Appends `-fuse-ld=lld`** after Zephyr's `-fuse-ld=bfd` via
-   `zephyr_link_libraries()`. GCC honours the *last* `-fuse-ld=` flag, so
-   lld takes precedence.
+- selects `-fuse-ld=lld` for both link steps
+- preprocesses linker scripts with `__LLD_LINKER_CMD__` (avoiding GNU ld
+  extensions like `ALIGN_WITH_INPUT`)
+- uses lld-compatible flags (`--sort-section=alignment` instead of
+  `--sort-common=descending`)
 
-You can verify the flags in `build_lld/build.ninja`:
+Verify with:
 
 ```bash
 grep -o 'fuse-ld=[a-z]*' build_lld/build.ninja | sort | uniq -c
-#   2 fuse-ld=bfd       ← Zephyr's default (appears first)
-#   2 fuse-ld=lld       ← our override  (appears last — wins)
+#   2 fuse-ld=lld
 ```
 
-### Prerequisites for lld
+### How it works — three remediation paths
 
-The system `ld.lld` must be discoverable by GCC's `collect2`. This means
-placing (or symlinking) `ld.lld` into the Zephyr SDK's linker search path:
+Zephyr's lld linker module was designed for clang+lld.  Using GCC+lld
+required solving three problems:
+
+| # | Problem | Solution |
+|---|---------|----------|
+| 1 | SDK unconditionally sets `LINKER=ld` | Custom toolchain variant (`cmake/toolchain/zephyr_lld/`) includes SDK then overrides `LINKER=lld` |
+| 2 | `ALIGN_WITH_INPUT` in linker scripts rejected by lld | Solved by (1): the lld module preprocesses with `__LLD_LINKER_CMD__` and `linker-tool-lld.h` removes `ALIGN_WITH_INPUT` |
+| 3 | Missing `-lgcc`, `-specs=` when lld module is active | Zephyr tree patches: `lld/gcc/linker_flags.cmake` + `lld/linker_libraries.cmake` |
+
+### Undoing the patches
 
 ```bash
-# Example — adjust SDK path as appropriate
-ln -sf $(which ld.lld) \
-  /path/to/zephyr-sdk-0.17.0/arm-zephyr-eabi/arm-zephyr-eabi/bin/ld.lld
+rm  "$ZEPHYR_BASE/cmake/linker/lld/gcc/linker_flags.cmake"
+git -C "$ZEPHYR_BASE" checkout cmake/linker/lld/linker_libraries.cmake
+rm  "$ZEPHYR_SDK_INSTALL_DIR/arm-zephyr-eabi/arm-zephyr-eabi/bin/ld.lld"
 ```
-
-### Current status: linker-script incompatibility (blocker)
-
-As of Zephyr v4.0.0 the lld build **does not yet link successfully** due to
-a fundamental mismatch between Zephyr's linker-script preprocessing and the
-linker that is actually invoked:
-
-| Aspect | `LINKER=ld` (default) | `LINKER=lld` (Zephyr's own lld module) |
-|--------|----------------------|----------------------------------------|
-| Preprocessor define | `__GCC_LINKER_CMD__` | `__LLD_LINKER_CMD__` |
-| Linker-script syntax | GNU ld extensions (`ALIGN_WITH_INPUT`, etc.) | lld-compatible subset |
-| Loaded by | `cmake/linker/ld/target.cmake` | `cmake/linker/lld/target.cmake` |
-
-Because the Zephyr SDK unconditionally sets `LINKER=ld` in
-`<sdk>/cmake/zephyr/generic.cmake` (a non-cache `set()` that overrides any
-prior cache value), the linker scripts are always preprocessed with
-`__GCC_LINKER_CMD__` — producing GNU ld syntax that lld rejects:
-
-```
-ld.lld: error: linker_zephyr_pre0.cmd:105: { expected, but got ALIGN_WITH_INPUT
->>>  app_shmem_regions : ALIGN_WITH_INPUT
-```
-
-### Paths to investigate next
-
-1. **Custom toolchain variant** — Create a thin
-   `cmake/toolchain/zephyr_lld/generic.cmake` that `include()`s the SDK's
-   `generic.cmake` and then resets `LINKER` to `lld`. This would cause
-   Zephyr's own `cmake/linker/lld/target.cmake` to be used, which
-   preprocesses linker scripts with `__LLD_LINKER_CMD__` and emits
-   lld-compatible flags.  The trade-off is that `lld/target.cmake` calls
-   `find_package(LlvmLld 14.0.0 REQUIRED)`, so a system lld ≥ 14 is
-   required.
-
-2. **Patch the SDK's `generic.cmake`** — Change the unconditional
-   `set(LINKER ld)` to `set_ifndef(LINKER ld)` so that a cache variable set
-   by the application or on the command line is respected.  This is arguably
-   the cleanest upstream fix.
-
-3. **Board-level linker-script overlay** — Provide a board overlay that
-   wraps `ALIGN_WITH_INPUT` and other GNU ld extensions behind
-   `#ifdef __GCC_LINKER_CMD__` guards.  This is fragile but could unblock
-   the link step without changing the Zephyr SDK.
 
 ## Project structure
 
 ```
 .
-├── CMakeLists.txt   # Build configuration; USE_LLD knob
-├── prj.conf         # Zephyr Kconfig (display, sensor, entropy)
+├── CMakeLists.txt                        # Build configuration; USE_LLD knob
+├── prj.conf                              # Zephyr Kconfig (display, sensor, entropy)
 ├── src/
-│   └── main.c       # Game logic, physics, rendering
+│   └── main.c                            # Game logic, physics, rendering
+├── cmake/
+│   ├── toolchain/zephyr_lld/             # Custom toolchain variant (Path 1)
+│   │   ├── generic.cmake                 #   wraps SDK, sets LINKER=lld
+│   │   └── target.cmake                  #   wraps SDK target setup
+│   ├── compiler/gcc/                     # Forwarding modules (TOOLCHAIN_ROOT compat)
+│   │   ├── generic.cmake
+│   │   ├── target.cmake
+│   │   └── compiler_flags.cmake
+│   ├── linker/
+│   │   ├── lld/
+│   │   │   ├── target.cmake
+│   │   │   ├── linker_flags.cmake
+│   │   │   └── linker_libraries.cmake
+│   │   └── target_template.cmake
+│   └── bintools/gnu/
+│       └── target.cmake
+├── scripts/
+│   └── setup_lld.sh                      # One-time Zephyr/SDK patching
 ├── .gitignore
-├── LICENSE           # MIT
-└── README.md         # This file
+├── LICENSE                               # MIT
+└── README.md                             # This file
 ```
 
 ## License
