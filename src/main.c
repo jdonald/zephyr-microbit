@@ -24,6 +24,7 @@
 #define TICK_MS          30   /* game loop period */
 #define ACCEL_SCALE      3.0f /* tilt-to-velocity sensitivity */
 #define FRICTION         0.85f
+#define MAX_SPEED        0.5f /* max cells per tick — prevents tunneling through walls */
 #define MIN_DISTANCE     2    /* minimum Manhattan distance for initial placement */
 
 /* ---------------------------------------------------------------------------
@@ -175,11 +176,7 @@ static void victory_animation(struct mb_display *disp)
 }
 
 /* ---------------------------------------------------------------------------
- * Collision with receptacle walls
- *
- * The receptacle occupies one grid cell and is walled on three sides.
- * When the marble is inside the receptacle cell, it can only exit through
- * the open side.
+ * Win condition
  * ------------------------------------------------------------------------ */
 static bool marble_in_receptacle(void)
 {
@@ -190,100 +187,92 @@ static bool marble_in_receptacle(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Wall collision helpers for the receptacle
+ * Wall collision
  *
- * When the marble approaches the receptacle cell from a walled side, it
- * bounces off. The open side lets the marble through.
+ * The three wall pixels around the receptacle are solid obstacles — the
+ * marble cannot enter those cells, just like the grid edges.  Movement is
+ * split into separate X and Y steps so the marble slides along walls
+ * naturally instead of getting stuck.
  * ------------------------------------------------------------------------ */
 
-/* Check if the marble is trying to enter the receptacle from a walled side
- * and, if so, prevent it. */
-static void apply_receptacle_walls(float old_x, float old_y)
+/* Return true if grid cell (x, y) is one of the receptacle's wall pixels. */
+static bool is_wall_pixel(int x, int y)
 {
-	int new_mx = (int)(marble_x + 0.5f);
-	int new_my = (int)(marble_y + 0.5f);
-	int old_mx = (int)(old_x + 0.5f);
-	int old_my = (int)(old_y + 0.5f);
+	if (recep_open != DIR_UP    && x == recep_x     && y == recep_y - 1)
+		return true;
+	if (recep_open != DIR_DOWN  && x == recep_x     && y == recep_y + 1)
+		return true;
+	if (recep_open != DIR_LEFT  && x == recep_x - 1 && y == recep_y)
+		return true;
+	if (recep_open != DIR_RIGHT && x == recep_x + 1 && y == recep_y)
+		return true;
+	return false;
+}
 
-	/* Only care when marble just moved into the receptacle cell */
-	if (new_mx != recep_x || new_my != recep_y) {
-		return;
+/* Clamp a float to [0, GRID_SIZE-1] and zero velocity on collision. */
+static float grid_clamp(float pos, float *vel)
+{
+	if (pos < 0.0f) {
+		*vel = 0.0f;
+		return 0.0f;
 	}
-	if (old_mx == recep_x && old_my == recep_y) {
-		return; /* already inside */
+	if (pos > (float)(GRID_SIZE - 1)) {
+		*vel = 0.0f;
+		return (float)(GRID_SIZE - 1);
 	}
-
-	/* Determine the direction of entry */
-	int dx = new_mx - old_mx;
-	int dy = new_my - old_my;
-
-	bool blocked = false;
-
-	/* Check if the entry direction is through a walled side */
-	if (dx > 0 && recep_open != DIR_LEFT) {
-		blocked = true; /* entering from left, but left is walled */
-	} else if (dx < 0 && recep_open != DIR_RIGHT) {
-		blocked = true; /* entering from right, but right is walled */
-	}
-
-	if (dy > 0 && recep_open != DIR_UP) {
-		blocked = true; /* entering from top, but top is walled */
-	} else if (dy < 0 && recep_open != DIR_DOWN) {
-		blocked = true; /* entering from bottom, but bottom is walled */
-	}
-
-	if (blocked) {
-		/* Push marble back to old position */
-		marble_x = old_x;
-		marble_y = old_y;
-		vel_x = 0.0f;
-		vel_y = 0.0f;
-	}
+	return pos;
 }
 
 /* ---------------------------------------------------------------------------
  * Physics update
+ *
+ * X and Y axes are moved independently.  After each axis move we check
+ * whether the marble's pixel position has landed on a wall pixel and, if
+ * so, undo that axis move and zero its velocity.  Velocity is capped at
+ * MAX_SPEED so the marble can never skip over a cell in one tick.
  * ------------------------------------------------------------------------ */
 static void update_physics(float ax, float ay)
 {
-	float old_x = marble_x;
-	float old_y = marble_y;
+	float dt = (float)TICK_MS / 1000.0f;
+	int px, py;
 
-	/* Accelerometer axes: tilting the board "right" gives +X accel,
-	 * tilting "toward you" (down in board orientation) gives +Y.
-	 * Map to LED grid: X axis = columns (left-right), Y axis = rows
-	 * (top-bottom). We negate X so tilting right moves the marble
-	 * rightward on the display. */
-	vel_x += ax * ACCEL_SCALE * ((float)TICK_MS / 1000.0f);
-	vel_y += -ay * ACCEL_SCALE * ((float)TICK_MS / 1000.0f);
+	/* Accelerometer → velocity */
+	vel_x += ax * ACCEL_SCALE * dt;
+	vel_y += -ay * ACCEL_SCALE * dt;
 
 	/* Friction */
 	vel_x *= FRICTION;
 	vel_y *= FRICTION;
 
-	/* Update position */
+	/* Cap speed to prevent tunneling through wall pixels */
+	vel_x = CLAMP(vel_x, -MAX_SPEED, MAX_SPEED);
+	vel_y = CLAMP(vel_y, -MAX_SPEED, MAX_SPEED);
+
+	/* --- Move X axis --- */
+	float saved = marble_x;
+
 	marble_x += vel_x;
+	marble_x = grid_clamp(marble_x, &vel_x);
+
+	px = CLAMP((int)(marble_x + 0.5f), 0, GRID_SIZE - 1);
+	py = CLAMP((int)(marble_y + 0.5f), 0, GRID_SIZE - 1);
+	if (is_wall_pixel(px, py)) {
+		marble_x = saved;
+		vel_x = 0.0f;
+	}
+
+	/* --- Move Y axis --- */
+	saved = marble_y;
+
 	marble_y += vel_y;
+	marble_y = grid_clamp(marble_y, &vel_y);
 
-	/* Clamp to grid boundaries (walled edges) */
-	if (marble_x < 0.0f) {
-		marble_x = 0.0f;
-		vel_x = 0.0f;
-	} else if (marble_x > (float)(GRID_SIZE - 1)) {
-		marble_x = (float)(GRID_SIZE - 1);
-		vel_x = 0.0f;
-	}
-
-	if (marble_y < 0.0f) {
-		marble_y = 0.0f;
-		vel_y = 0.0f;
-	} else if (marble_y > (float)(GRID_SIZE - 1)) {
-		marble_y = (float)(GRID_SIZE - 1);
+	px = CLAMP((int)(marble_x + 0.5f), 0, GRID_SIZE - 1);
+	py = CLAMP((int)(marble_y + 0.5f), 0, GRID_SIZE - 1);
+	if (is_wall_pixel(px, py)) {
+		marble_y = saved;
 		vel_y = 0.0f;
 	}
-
-	/* Check receptacle wall collision */
-	apply_receptacle_walls(old_x, old_y);
 }
 
 /* ---------------------------------------------------------------------------

@@ -158,13 +158,13 @@ incompatibilities between Zephyr's lld module (designed for clang) and GCC.
 
 - **lld >= 14.0** installed on the system:
   - **Linux:** `sudo apt install lld` (Debian/Ubuntu) or equivalent
-  - **macOS (Xcode >= 15):** `ld.lld` may already be available via Xcode
-    Command Line Tools.  Check with: `xcrun --find ld.lld`.  The setup
-    script searches Xcode toolchain paths automatically.
-  - **macOS (older Xcode):** if `xcrun --find ld.lld` returns nothing,
-    install LLVM via Homebrew (`brew install llvm`) or download pre-built
-    binaries from <https://github.com/llvm/llvm-project/releases> and
-    pass `LLD_PATH=/path/to/bin/ld.lld` when running the setup script.
+  - **macOS:** Xcode's command-line tools do **not** include `ld.lld`
+    (Apple ships its own Mach-O linker at `/usr/bin/ld`, which cannot
+    produce bare-metal ARM ELF binaries).  Install LLVM separately via
+    Homebrew (`brew install llvm`, then `ld.lld` is at
+    `/opt/homebrew/opt/llvm/bin/ld.lld`) or download pre-built binaries
+    from <https://github.com/llvm/llvm-project/releases> and pass
+    `LLD_PATH=/path/to/bin/ld.lld` when running the setup script.
 - One-time setup to patch the Zephyr tree and SDK (see below)
 
 ### Setup
