@@ -158,11 +158,13 @@ incompatibilities between Zephyr's lld module (designed for clang) and GCC.
 
 - **lld >= 14.0** installed on the system:
   - **Linux:** `sudo apt install lld` (Debian/Ubuntu) or equivalent
-  - **macOS:** download pre-built LLVM binaries from
-    <https://github.com/llvm/llvm-project/releases> (look for
-    `clang+llvm-*-arm64-apple-macosx*.tar.xz` for Apple Silicon or the
-    `x86_64` variant for Intel).  Extract the archive — `ld.lld` is in
-    the `bin/` directory.
+  - **macOS (Xcode >= 15):** `ld.lld` may already be available via Xcode
+    Command Line Tools.  Check with: `xcrun --find ld.lld`.  The setup
+    script searches Xcode toolchain paths automatically.
+  - **macOS (older Xcode):** if `xcrun --find ld.lld` returns nothing,
+    install LLVM via Homebrew (`brew install llvm`) or download pre-built
+    binaries from <https://github.com/llvm/llvm-project/releases> and
+    pass `LLD_PATH=/path/to/bin/ld.lld` when running the setup script.
 - One-time setup to patch the Zephyr tree and SDK (see below)
 
 ### Setup
@@ -172,11 +174,11 @@ Run the provided setup script to apply the required patches:
 ```bash
 export ZEPHYR_BASE=~/zephyrproject/zephyr   # adjust if needed
 
-# Linux (ld.lld is on PATH after 'apt install lld'):
+# Linux / macOS with Xcode >= 15 (ld.lld found automatically):
 ./scripts/setup_lld.sh
 
-# macOS (point to the ld.lld from your LLVM download):
-LLD_PATH=/path/to/clang+llvm/bin/ld.lld ./scripts/setup_lld.sh
+# macOS with explicit path (if ld.lld is not in PATH or Xcode):
+LLD_PATH=/path/to/bin/ld.lld ./scripts/setup_lld.sh
 ```
 
 The script applies three non-destructive, reversible patches:

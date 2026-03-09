@@ -92,17 +92,28 @@ if [ -n "${LLD_PATH:-}" ]; then
 elif command -v ld.lld >/dev/null 2>&1; then
   LLD_BIN="$(command -v ld.lld)"
 else
-  # On macOS, check common LLVM install locations
-  for candidate in \
-    /usr/local/opt/llvm/bin/ld.lld \
-    /opt/homebrew/opt/llvm/bin/ld.lld \
-    /usr/local/llvm/bin/ld.lld \
-    /opt/llvm/bin/ld.lld; do
-    if [ -x "$candidate" ]; then
-      LLD_BIN="$candidate"
-      break
-    fi
-  done
+  # Try Xcode / Command Line Tools toolchain (macOS)
+  _xcrun_lld=""
+  if command -v xcrun >/dev/null 2>&1; then
+    _xcrun_lld=$(xcrun --find ld.lld 2>/dev/null || true)
+  fi
+  if [ -n "$_xcrun_lld" ] && [ -x "$_xcrun_lld" ]; then
+    LLD_BIN="$_xcrun_lld"
+  else
+    # Check known Xcode / CLT paths and common LLVM install locations
+    for candidate in \
+      /Library/Developer/CommandLineTools/usr/bin/ld.lld \
+      /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld.lld \
+      /usr/local/opt/llvm/bin/ld.lld \
+      /opt/homebrew/opt/llvm/bin/ld.lld \
+      /usr/local/llvm/bin/ld.lld \
+      /opt/llvm/bin/ld.lld; do
+      if [ -x "$candidate" ]; then
+        LLD_BIN="$candidate"
+        break
+      fi
+    done
+  fi
 fi
 
 if [ -z "$LLD_BIN" ]; then
@@ -110,8 +121,11 @@ if [ -z "$LLD_BIN" ]; then
   echo "" >&2
   echo "Install lld:" >&2
   echo "  Linux:  sudo apt install lld" >&2
-  echo "  macOS:  download LLVM from https://github.com/llvm/llvm-project/releases" >&2
-  echo "          then: LLD_PATH=/path/to/llvm/bin/ld.lld ./scripts/setup_lld.sh" >&2
+  echo "  macOS:  If Xcode >= 15 is installed, ld.lld may already be present." >&2
+  echo "          Check: xcrun --find ld.lld" >&2
+  echo "          Otherwise install LLVM (e.g. via Homebrew: brew install llvm)" >&2
+  echo "          or download from https://github.com/llvm/llvm-project/releases" >&2
+  echo "          then: LLD_PATH=/path/to/bin/ld.lld ./scripts/setup_lld.sh" >&2
   exit 1
 fi
 echo "ld.lld      = $LLD_BIN"
