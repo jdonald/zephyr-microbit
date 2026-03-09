@@ -81,40 +81,18 @@ cd zephyr-sdk-0.17.0
 #### macOS
 
 The SDK's `setup.sh` uses `wget`, which is not installed by default on
-macOS.  The simplest workaround is a small wrapper script that translates
-`wget` calls to `curl`:
+macOS.  This repository includes a small `scripts/wget` shim that
+translates `wget` calls to `curl`.
 
 ```bash
-# Create a temporary wget wrapper (only needed during SDK setup)
-cat > /tmp/wget-wrapper.sh << 'WRAPPER'
-#!/bin/bash
-output_file="" ; url=""
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    -O) output_file="$2"; shift ;;
-     *) url="$1" ;;
-  esac; shift
-done
-if [[ -n "$url" ]]; then
-  if [[ -n "$output_file" ]]; then exec curl -L -o "$output_file" "$url"
-  else exec curl -L -O "$url"; fi
-else echo "Usage: $0 [-O <file>] <URL>" >&2; exit 1; fi
-WRAPPER
-chmod +x /tmp/wget-wrapper.sh
-```
-
-Then download and install:
-
-```bash
-cd ~/zephyr-microbit   # or any directory you prefer
+cd ~/zephyr-microbit   # the root of this repository
 curl -L -O https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.0/zephyr-sdk-0.17.0_macos-x86_64_minimal.tar.xz
 # Apple Silicon: use zephyr-sdk-0.17.0_macos-aarch64_minimal.tar.xz instead
 tar xf zephyr-sdk-0.17.0_macos-*_minimal.tar.xz
 cd zephyr-sdk-0.17.0
 
-# Run setup with the wget wrapper on PATH so setup.sh can find "wget"
-PATH="/tmp:$PATH" ln -sf /tmp/wget-wrapper.sh /tmp/wget
-./setup.sh -t arm-zephyr-eabi -c
+# Put the wget shim on PATH so setup.sh can find "wget"
+PATH="$HOME/zephyr-microbit/scripts:$PATH" ./setup.sh -t arm-zephyr-eabi -c
 ```
 
 ## Building (default — ld.bfd linker)

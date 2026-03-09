@@ -1,0 +1,45 @@
+#!/bin/bash
+# wget — curl-based shim for systems that lack GNU wget.
+#
+# Zephyr SDK's setup.sh invokes wget to download toolchain components.
+# macOS does not ship wget.  This script translates the subset of wget
+# flags used by setup.sh into equivalent curl calls.
+#
+# Usage:
+#   Put this script's directory on PATH before running setup.sh:
+#     PATH="$(pwd)/scripts:$PATH" ./zephyr-sdk-0.17.0/setup.sh -t arm-zephyr-eabi -c
+
+output_file=""
+url=""
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -O)
+      if [[ -n "$2" ]] && [[ "$2" != -* ]]; then
+        output_file="$2"
+        shift
+      else
+        echo "Error: -O requires a filename argument" >&2
+        exit 1
+      fi
+      ;;
+    -q|--quiet)
+      # Ignored — curl uses -s for silent mode but we keep progress
+      ;;
+    *)
+      url="$1"
+      ;;
+  esac
+  shift
+done
+
+if [[ -n "$url" ]]; then
+  if [[ -n "$output_file" ]]; then
+    exec curl -L -o "$output_file" "$url"
+  else
+    exec curl -L -O "$url"
+  fi
+else
+  echo "Usage: $0 [-O <filename>] <URL>" >&2
+  exit 1
+fi

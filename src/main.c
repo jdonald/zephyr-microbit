@@ -69,38 +69,17 @@ static int rand_range(int lo, int hi)
 /* ---------------------------------------------------------------------------
  * Level generation
  *
- * Places a receptacle at a random position along any edge, with the opening
- * facing inward.  Then places the marble at a random spot that is at least
- * MIN_DISTANCE Manhattan-distance away.
+ * Places the receptacle centre in the inner 3×3 area (coordinates 1-3) so
+ * that all three wall pixels are always on-grid and visible.  The opening
+ * faces a random direction.  The marble starts at least MIN_DISTANCE
+ * Manhattan-distance from the receptacle.
  * ------------------------------------------------------------------------ */
 static void generate_level(void)
 {
-	/* Pick which edge the receptacle sits on and choose an opening that
-	 * faces inward so the marble must approach from inside the grid. */
-	int edge = rand_range(0, 3);
-
-	switch (edge) {
-	case 0: /* top edge */
-		recep_x = rand_range(0, GRID_SIZE - 1);
-		recep_y = 0;
-		recep_open = DIR_DOWN;
-		break;
-	case 1: /* bottom edge */
-		recep_x = rand_range(0, GRID_SIZE - 1);
-		recep_y = GRID_SIZE - 1;
-		recep_open = DIR_UP;
-		break;
-	case 2: /* left edge */
-		recep_x = 0;
-		recep_y = rand_range(0, GRID_SIZE - 1);
-		recep_open = DIR_RIGHT;
-		break;
-	default: /* right edge */
-		recep_x = GRID_SIZE - 1;
-		recep_y = rand_range(0, GRID_SIZE - 1);
-		recep_open = DIR_LEFT;
-		break;
-	}
+	/* Inner 3×3: guarantees every adjacent wall pixel is on-grid. */
+	recep_x = rand_range(1, GRID_SIZE - 2);
+	recep_y = rand_range(1, GRID_SIZE - 2);
+	recep_open = (enum direction)rand_range(0, DIR_COUNT - 1);
 
 	/* Place the marble far enough away */
 	int mx, my;
@@ -133,13 +112,15 @@ static void render_frame(struct mb_display *disp)
 {
 	struct mb_image frame = {};
 
-	/* Draw the receptacle: centre pixel plus a wall pixel on each walled
-	 * side (3 walls).  The open side has no wall pixel, making the
-	 * entry direction visible to the player.  Wall pixels that fall
-	 * outside the grid are simply omitted — the physical board edge
-	 * already acts as a wall there. */
-	set_pixel(&frame, recep_x, recep_y);
-
+	/* Draw the receptacle as 3 wall pixels forming an isosceles triangle.
+	 * The centre cell (the "hole") is NOT drawn — the marble lights it
+	 * up when it enters.  The gap in the triangle shows the open side.
+	 *
+	 *  Open UP:    Open DOWN:   Open LEFT:   Open RIGHT:
+	 *    .            X            .X            X.
+	 *   X X          X X          .X            X.
+	 *    X            .           X.            .X
+	 */
 	if (recep_open != DIR_UP)
 		set_pixel(&frame, recep_x, recep_y - 1); /* wall above */
 	if (recep_open != DIR_DOWN)

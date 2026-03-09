@@ -51,15 +51,23 @@ echo "ZEPHYR_BASE = $ZEPHYR_BASE"
 # Locate Zephyr SDK
 # ---------------------------------------------------------------------------
 if [ -z "${ZEPHYR_SDK_INSTALL_DIR:-}" ]; then
-  # Try to read from cmake package registry
-  for f in "$HOME"/.cmake/packages/Zephyr-sdk/* /root/.cmake/packages/Zephyr-sdk/* 2>/dev/null; do
-    [ -f "$f" ] || continue
-    candidate_cmake_dir=$(cat "$f" | tr -d '[:space:]')
-    candidate_dir=$(dirname "$candidate_cmake_dir")
-    if [ -f "$candidate_dir/cmake/zephyr/generic.cmake" ]; then
-      ZEPHYR_SDK_INSTALL_DIR="$candidate_dir"
-      break
-    fi
+  # Try to read from cmake package registry.
+  # Check each candidate directory separately to avoid glob errors on
+  # macOS bash 3.2 when a directory does not exist.
+  _sdk_registry_dirs="$HOME/.cmake/packages/Zephyr-sdk"
+  [ "$(id -u)" = "0" ] && _sdk_registry_dirs="$_sdk_registry_dirs /root/.cmake/packages/Zephyr-sdk"
+
+  for _reg_dir in $_sdk_registry_dirs; do
+    [ -d "$_reg_dir" ] || continue
+    for f in "$_reg_dir"/*; do
+      [ -f "$f" ] || continue
+      candidate_cmake_dir=$(tr -d '[:space:]' < "$f")
+      candidate_dir=$(dirname "$candidate_cmake_dir")
+      if [ -f "$candidate_dir/cmake/zephyr/generic.cmake" ]; then
+        ZEPHYR_SDK_INSTALL_DIR="$candidate_dir"
+        break 2
+      fi
+    done
   done
 fi
 
