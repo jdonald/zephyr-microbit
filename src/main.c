@@ -10,6 +10,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/pwm.h>
 #include <zephyr/display/mb_display.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/random/random.h>
@@ -56,6 +57,43 @@ static float vel_y;
 static int recep_x;
 static int recep_y;
 static enum direction recep_open; /* which side is open */
+
+/* ---------------------------------------------------------------------------
+ * Sound
+ *
+ * The micro:bit V2 has a piezo buzzer driven by PWM1.  We use PWM_HZ()
+ * to convert a frequency to a period and drive it at 50 % duty cycle
+ * for maximum volume.
+ * ------------------------------------------------------------------------ */
+static const struct pwm_dt_spec buzzer = PWM_DT_SPEC_GET(DT_PATH(zephyr_user));
+static bool buzzer_ok; /* set once at init */
+
+static void tone(uint32_t freq_hz, uint32_t ms)
+{
+	if (!buzzer_ok) {
+		return;
+	}
+	uint32_t period = PWM_HZ(freq_hz);
+
+	pwm_set_dt(&buzzer, period, period / 2U);
+	k_msleep(ms);
+	pwm_set_pulse_dt(&buzzer, 0);
+}
+
+static void sound_collision(void)
+{
+	tone(1200, 15);
+}
+
+static void sound_victory(void)
+{
+	/* Ascending three-note fanfare: C5 → E5 → G5 */
+	tone(523, 100);
+	k_msleep(30);
+	tone(659, 100);
+	k_msleep(30);
+	tone(784, 200);
+}
 
 /* ---------------------------------------------------------------------------
  * Random helpers
@@ -231,10 +269,14 @@ static float grid_clamp(float pos, float *vel)
  * so, undo that axis move and zero its velocity.  Velocity is capped at
  * MAX_SPEED so the marble can never skip over a cell in one tick.
  * ------------------------------------------------------------------------ */
-static void update_physics(float ax, float ay)
+#define HIT_VEL_THRESHOLD 0.05f /* ignore trivially slow touches */
+
+static bool update_physics(float ax, float ay)
 {
 	float dt = (float)TICK_MS / 1000.0f;
+	bool hit = false;
 	int px, py;
+	float pre_vx, pre_vy;
 
 	/* Accelerometer → velocity */
 	vel_x += ax * ACCEL_SCALE * dt;
@@ -251,6 +293,7 @@ static void update_physics(float ax, float ay)
 	/* --- Move X axis --- */
 	float saved = marble_x;
 
+	pre_vx = vel_x;
 	marble_x += vel_x;
 	marble_x = grid_clamp(marble_x, &vel_x);
 
@@ -260,10 +303,14 @@ static void update_physics(float ax, float ay)
 		marble_x = saved;
 		vel_x = 0.0f;
 	}
+	if (vel_x == 0.0f && fabsf(pre_vx) > HIT_VEL_THRESHOLD) {
+		hit = true;
+	}
 
 	/* --- Move Y axis --- */
 	saved = marble_y;
 
+	pre_vy = vel_y;
 	marble_y += vel_y;
 	marble_y = grid_clamp(marble_y, &vel_y);
 
@@ -273,6 +320,11 @@ static void update_physics(float ax, float ay)
 		marble_y = saved;
 		vel_y = 0.0f;
 	}
+	if (vel_y == 0.0f && fabsf(pre_vy) > HIT_VEL_THRESHOLD) {
+		hit = true;
+	}
+
+	return hit;
 }
 
 /* ---------------------------------------------------------------------------
@@ -292,6 +344,8 @@ int main(void)
 			return 0;
 		}
 	}
+
+	buzzer_ok = pwm_is_ready_dt(&buzzer);
 
 	/* Start the first level */
 	generate_level();
@@ -314,15 +368,18 @@ int main(void)
 		}
 
 		/* Physics step */
-		update_physics(ax, ay);
+		bool hit_wall = update_physics(ax, ay);
 
 		/* Render */
 		render_frame(disp);
 
 		/* Check win condition */
 		if (marble_in_receptacle()) {
+			sound_victory();
 			victory_animation(disp);
 			generate_level();
+		} else if (hit_wall) {
+			sound_collision();
 		}
 
 		k_msleep(TICK_MS);
