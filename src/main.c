@@ -120,13 +120,34 @@ static void generate_level(void)
  * Rendering helpers
  * ------------------------------------------------------------------------ */
 
+/* Helper: light a pixel if it is within the grid */
+static void set_pixel(struct mb_image *img, int x, int y)
+{
+	if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
+		img->row[y] |= BIT(x);
+	}
+}
+
 /* Render the current game frame: marble + receptacle */
 static void render_frame(struct mb_display *disp)
 {
 	struct mb_image frame = {};
 
-	/* Draw the receptacle as an always-on pixel */
-	frame.row[recep_y] |= BIT(recep_x);
+	/* Draw the receptacle: centre pixel plus a wall pixel on each walled
+	 * side (3 walls).  The open side has no wall pixel, making the
+	 * entry direction visible to the player.  Wall pixels that fall
+	 * outside the grid are simply omitted — the physical board edge
+	 * already acts as a wall there. */
+	set_pixel(&frame, recep_x, recep_y);
+
+	if (recep_open != DIR_UP)
+		set_pixel(&frame, recep_x, recep_y - 1); /* wall above */
+	if (recep_open != DIR_DOWN)
+		set_pixel(&frame, recep_x, recep_y + 1); /* wall below */
+	if (recep_open != DIR_LEFT)
+		set_pixel(&frame, recep_x - 1, recep_y); /* wall left  */
+	if (recep_open != DIR_RIGHT)
+		set_pixel(&frame, recep_x + 1, recep_y); /* wall right */
 
 	/* Draw the marble (rounded to nearest pixel) */
 	int mx = (int)(marble_x + 0.5f);
@@ -135,7 +156,7 @@ static void render_frame(struct mb_display *disp)
 	mx = CLAMP(mx, 0, GRID_SIZE - 1);
 	my = CLAMP(my, 0, GRID_SIZE - 1);
 
-	frame.row[my] |= BIT(mx);
+	set_pixel(&frame, mx, my);
 
 	mb_display_image(disp, MB_DISPLAY_MODE_SINGLE, SYS_FOREVER_MS,
 			 &frame, 1);

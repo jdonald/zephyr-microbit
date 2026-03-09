@@ -5,10 +5,16 @@
 # Usage:
 #   ./scripts/setup_lld.sh
 #
+# Environment variables (all optional — the script tries to auto-detect):
+#   ZEPHYR_BASE            Path to the Zephyr tree (default: ~/zephyrproject/zephyr)
+#   ZEPHYR_SDK_INSTALL_DIR Path to the Zephyr SDK (auto-detected from cmake registry)
+#   LLD_PATH               Explicit path to the ld.lld binary (otherwise found via PATH)
+#
 # Prerequisites:
-#   - ZEPHYR_BASE must be set (or ~/zephyrproject/zephyr must exist)
-#   - ZEPHYR_SDK_INSTALL_DIR must be set (or discoverable via cmake registry)
-#   - ld.lld must be installed on the system (e.g. apt install lld)
+#   - ld.lld must be installed on the system:
+#       Linux:  apt install lld  (or equivalent)
+#       macOS:  download LLVM from https://github.com/llvm/llvm-project/releases
+#               and set LLD_PATH=/path/to/llvm/bin/ld.lld
 #
 # What this script does:
 #   1. Creates cmake/linker/lld/gcc/linker_flags.cmake in the Zephyr tree
@@ -65,13 +71,42 @@ SDK_DIR="$ZEPHYR_SDK_INSTALL_DIR"
 echo "SDK_DIR     = $SDK_DIR"
 
 # ---------------------------------------------------------------------------
-# Check ld.lld is available
+# Locate ld.lld
 # ---------------------------------------------------------------------------
-if ! command -v ld.lld >/dev/null 2>&1; then
-  echo "ERROR: ld.lld not found. Install LLVM/lld (e.g. apt install lld)." >&2
+LLD_BIN=""
+if [ -n "${LLD_PATH:-}" ]; then
+  if [ -x "$LLD_PATH" ]; then
+    LLD_BIN="$LLD_PATH"
+  else
+    echo "ERROR: LLD_PATH=$LLD_PATH is not an executable." >&2
+    exit 1
+  fi
+elif command -v ld.lld >/dev/null 2>&1; then
+  LLD_BIN="$(command -v ld.lld)"
+else
+  # On macOS, check common LLVM install locations
+  for candidate in \
+    /usr/local/opt/llvm/bin/ld.lld \
+    /opt/homebrew/opt/llvm/bin/ld.lld \
+    /usr/local/llvm/bin/ld.lld \
+    /opt/llvm/bin/ld.lld; do
+    if [ -x "$candidate" ]; then
+      LLD_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$LLD_BIN" ]; then
+  echo "ERROR: ld.lld not found." >&2
+  echo "" >&2
+  echo "Install lld:" >&2
+  echo "  Linux:  sudo apt install lld" >&2
+  echo "  macOS:  download LLVM from https://github.com/llvm/llvm-project/releases" >&2
+  echo "          then: LLD_PATH=/path/to/llvm/bin/ld.lld ./scripts/setup_lld.sh" >&2
   exit 1
 fi
-echo "ld.lld      = $(command -v ld.lld)"
+echo "ld.lld      = $LLD_BIN"
 
 # ---------------------------------------------------------------------------
 # Patch 1: Create cmake/linker/lld/gcc/linker_flags.cmake
@@ -151,8 +186,8 @@ LLD_SYMLINK="$SDK_BIN/ld.lld"
 if [ -f "$LLD_SYMLINK" ] || [ -L "$LLD_SYMLINK" ]; then
   echo "SKIP: $LLD_SYMLINK already exists."
 else
-  ln -sf "$(command -v ld.lld)" "$LLD_SYMLINK"
-  echo "SYMLINKED: $LLD_SYMLINK -> $(command -v ld.lld)"
+  ln -sf "$LLD_BIN" "$LLD_SYMLINK"
+  echo "SYMLINKED: $LLD_SYMLINK -> $LLD_BIN"
 fi
 
 # ---------------------------------------------------------------------------
